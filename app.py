@@ -639,17 +639,20 @@ def place_order(signal, symbol, req_json):
 def webhook():
     try:
         raw = request.data.decode('utf-8').strip()
+        print(f"[DEBUG] Raw payload: {raw}")   # <--- 추가
         if not raw:
             print("No payload received from TradingView")
             return jsonify({'error': 'No payload received from TradingView'}), 400
         try:
             data = json.loads(raw)
+            print(f"[DEBUG] JSON parsed: {data}")   # <--- 추가
         except Exception as e:
             print("Failed to decode JSON:", e)
             print(traceback.format_exc())
             return jsonify({'error': f'Failed to decode JSON: {e}'}), 400
         signal = data.get('signal')
         symbol = data.get('symbol', None)
+        print(f"[DEBUG] signal: {signal}, symbol: {symbol}")   # <--- 추가
         if not signal or not symbol:
             print("Invalid signal or symbol")
             return jsonify({'error': 'Invalid signal or symbol'}), 400
