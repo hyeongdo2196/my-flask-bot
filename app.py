@@ -20,38 +20,37 @@ TRADE_LEVERAGE = 10
 MY_RISK_RATIO = 0.10
 TRADE_MARGIN_MODE = 'ISOLATED'
 
-TP_PROFIT_RATE = 0.06   # 목표수익률 +7%
-SL_LOSS_RATE   = -0.02  # 손절수익률 -2% (음수)
-COMMISSION = 0.0006     # 왕복수수료(0.03%*2*레버)
+TP_PROFIT_RATE = 0.06
+SL_LOSS_RATE   = -0.02
+COMMISSION = 0.0006
 
 SYMBOL_POLICY = {
     'BTCUSDT': {
-        'tp': 0.06,   # 기본 익절 +10%
-        'sl': -0.02,  # 기본 손절 -3%
-        'trailing_steps': [   # 여러 번 트레일링스탑
-            {'trigger': 0.05, 'sl': 0.03},  # +5% 돌파시 SL+3%
-            {'trigger': 0.07, 'sl': 0.05},  # +7% 돌파시 SL+5%
+        'tp': 0.06,
+        'sl': -0.02,
+        'trailing_steps': [
+            {'trigger': 0.05, 'sl': 0.03},
+            {'trigger': 0.07, 'sl': 0.05},
         ],
     },
     'ETHUSDT': {
         'tp': 0.06,
         'sl': -0.02,
-        'trailing_steps': [   # 여러 번 트레일링스탑
-            {'trigger': 0.05, 'sl': 0.03},  # +5% 돌파시 SL+3%
-            {'trigger': 0.07, 'sl': 0.05},  # +7% 돌파시 SL+5%
+        'trailing_steps': [
+            {'trigger': 0.05, 'sl': 0.03},
+            {'trigger': 0.07, 'sl': 0.05},
         ],
     },
     'DOGEUSDT': {
-        'tp': 0.1,  # +10% 익절
-        'sl': -0.02, # -2% 손절
-        'trailing_steps': [   # 여러 번 트레일링스탑
-            {'trigger': 0.05, 'sl': 0.03},  # +5% 돌파시 SL+3%
-            {'trigger': 0.07, 'sl': 0.05},  # +7% 돌파시 SL+5%
+        'tp': 0.1,
+        'sl': -0.02,
+        'trailing_steps': [
+            {'trigger': 0.05, 'sl': 0.03},
+            {'trigger': 0.07, 'sl': 0.05},
         ],
     }
 }
 
-### 심볼 메타정보 자동 관리 ###
 def get_precision_from_step(step):
     try:
         if float(step) == 1:
@@ -113,7 +112,6 @@ def refresh_symbol_meta():
 def get_underlying_symbol(symbol):
     return symbol.replace('.P', '')
 
-### 공통 요청/서명 ###
 def get_timestamp():
     return str(int(time.time() * 1000))
 
@@ -146,7 +144,6 @@ def http_request(method, endpoint, body_dict):
 
 refresh_symbol_meta()
 
-### 진입수량/포지션/오더 관리 유틸 ###
 def get_my_balance():
     endpoint = '/v5/account/wallet-balance'
     params = {'accountType': 'UNIFIED'}
@@ -324,27 +321,14 @@ def enforce_min_tick_gap(entry, tgt, tick, min_gap=20):
             tgt = entry - min_dist
     return round_to_tick(tgt, tick)
 
-### ⬇️ 수익률 기준 TP/SL 지정가 산출 함수 추가 ###
 def get_tp_sl_by_real_pnl(entry_price, position_idx, lev, tp_pnl=TP_PROFIT_RATE, sl_pnl=SL_LOSS_RATE, commission=COMMISSION):
-    """
-    내 계좌 실현 손익률 기준 TP/SL 지정가 계산
-    - entry_price: 진입가
-    - position_idx: 1=롱, 2=숏
-    - lev: 레버리지
-    - tp_pnl: 익절 목표수익률 (ex: 0.07)
-    - sl_pnl: 손절 목표수익률 (ex: -0.02)
-    - commission: 왕복수수료율
-    """
-    if position_idx == 1:  # 롱
+    if position_idx == 1:
         tp = entry_price * (1 + (tp_pnl + commission) / lev)
         sl = entry_price * (1 + (sl_pnl - commission) / lev)
-    else:  # 숏
+    else:
         tp = entry_price * (1 - (tp_pnl - commission) / lev)
         sl = entry_price * (1 - (sl_pnl + commission) / lev)
     return tp, sl
-
-#### 오더/트레이딩스톱 관리 모듈(이하 생략, 기존 동일) ####
-# ... (여기서부터는 기존 함수/로직 그대로!)
 
 def set_trading_stop(symbol, position_idx, tp_price, sl_price):
     body = {
@@ -452,21 +436,17 @@ def monitor_and_cleanup(symbol, position_idx, tp_order_id, sl_order_id):
         time.sleep(1)
 
 def monitor_trailing_stop(symbol, position_idx, entry_price, lev, policy):
-    """
-    여러 번 트레일링스탑 적용 가능하도록 로직 개선
-    policy['trailing_steps'] : [{'trigger': 0.02, 'sl': 0.01}, ...] 구조 사용
-    """
     steps = policy.get('trailing_steps', None)
     commission = COMMISSION
     if not steps:
-        return  # 단계 지정 안 했으면 기존과 동일
+        return
 
     step_idx = 0
     triggered = set()
     while True:
         size = get_position_size(symbol, position_idx)
         if size == 0:
-            break  # 포지션 종료시 끝냄
+            break
 
         endpoint = '/v5/position/list'
         body = {"category": "linear", "symbol": symbol}
@@ -482,12 +462,11 @@ def monitor_trailing_stop(symbol, position_idx, entry_price, lev, policy):
                         direction = 1 if position_idx == 1 else -1
                         pnl_rate = direction * (last_price - entry) / entry * lev
 
-                        # 여러 단계 트레일링 적용
                         for i, s in enumerate(steps):
                             trigger = s['trigger']
                             trail_sl = s['sl']
                             if i not in triggered and pnl_rate >= trigger:
-                                if position_idx == 1:  # 롱
+                                if position_idx == 1:
                                     new_sl = entry * (1 + (trail_sl - commission) / lev)
                                 else:
                                     new_sl = entry * (1 - (trail_sl + commission) / lev)
@@ -504,6 +483,9 @@ def place_order(signal, symbol, req_json):
     try:
         bybit_symbol = get_underlying_symbol(symbol)
         qty = get_order_qty(bybit_symbol, order_type="Market")
+        print(f"[DEBUG] 주문수량: {qty}, 심볼: {bybit_symbol}")  # ← 추가 (1)
+        my_balance = get_my_balance()
+        print(f"[DEBUG] 내 USDT 잔고: {my_balance}")            # ← 추가 (2)
         if qty is None or qty == 0:
             print("[ERROR] 주문수량 0, 진입 스킵")
             return {'error': 'Order qty 0, skip'}
@@ -511,7 +493,6 @@ def place_order(signal, symbol, req_json):
         client_order_id = f"entry_{uuid.uuid4().hex}"
         qty_for_api = qty_str
 
-        # === 심볼별 정책 불러오기 ===
         policy = get_symbol_policy(bybit_symbol)
         tp_pnl = policy['tp']
         sl_pnl = policy['sl']
@@ -534,7 +515,9 @@ def place_order(signal, symbol, req_json):
                     'positionIdx': 1,
                     'orderLinkId': client_order_id
                 }
+                print("[DEBUG] 주문 요청 body:", body)           # ← 추가 (3)
                 resp = http_request('POST', endpoint, body)
+                print("[DEBUG] 주문 응답:", resp.text)           # ← 추가 (4)
                 actual_size = wait_until_position_open(bybit_symbol, 1, timeout=10, interval=0.5)
                 if actual_size == 0:
                     print("[경고] 진입 후 10초 내 포지션 생성 안됨!")
@@ -557,7 +540,7 @@ def place_order(signal, symbol, req_json):
 
                 tick = SYMBOL_TICK_SIZE.get(bybit_symbol, 0.01)
                 tp_price, sl_price = get_tp_sl_by_real_pnl(
-                    entry_price, 1, TRADE_LEVERAGE, 
+                    entry_price, 1, TRADE_LEVERAGE,
                     tp_pnl=tp_pnl, sl_pnl=sl_pnl, commission=COMMISSION
                 )
                 if trailing_steps:
@@ -589,7 +572,9 @@ def place_order(signal, symbol, req_json):
                     'positionIdx': 2,
                     'orderLinkId': client_order_id
                 }
+                print("[DEBUG] 주문 요청 body:", body)           # ← 추가 (3)
                 resp = http_request('POST', endpoint, body)
+                print("[DEBUG] 주문 응답:", resp.text)           # ← 추가 (4)
                 actual_size = wait_until_position_open(bybit_symbol, 2, timeout=10, interval=0.5)
                 if actual_size == 0:
                     print("[경고] 진입 후 10초 내 포지션 생성 안됨!")
@@ -634,25 +619,21 @@ def place_order(signal, symbol, req_json):
         print("[place_order ERROR]", traceback.format_exc())
         return {'error': str(e)}
 
-### 이하 웹서버/핸들러는 기존 동일 ###
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
         raw = request.data.decode('utf-8').strip()
-        print(f"[DEBUG] Raw payload: {raw}")   # <--- 추가
         if not raw:
             print("No payload received from TradingView")
             return jsonify({'error': 'No payload received from TradingView'}), 400
         try:
             data = json.loads(raw)
-            print(f"[DEBUG] JSON parsed: {data}")   # <--- 추가
         except Exception as e:
             print("Failed to decode JSON:", e)
             print(traceback.format_exc())
             return jsonify({'error': f'Failed to decode JSON: {e}'}), 400
         signal = data.get('signal')
         symbol = data.get('symbol', None)
-        print(f"[DEBUG] signal: {signal}, symbol: {symbol}")   # <--- 추가
         if not signal or not symbol:
             print("Invalid signal or symbol")
             return jsonify({'error': 'Invalid signal or symbol'}), 400
