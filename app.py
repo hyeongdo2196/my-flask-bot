@@ -20,9 +20,9 @@ TRADE_LEVERAGE = 10
 MY_RISK_RATIO = 0.10
 TRADE_MARGIN_MODE = 'ISOLATED'
 
-TP_PROFIT_RATE = 0.06
-SL_LOSS_RATE   = -0.02
-COMMISSION = 0.0006
+TP_PROFIT_RATE = 0.06   # 목표수익률 +7%
+SL_LOSS_RATE   = -0.02  # 손절수익률 -2% (음수)
+COMMISSION = 0.0006     # 왕복수수료(0.03%*2*레버)
 
 SYMBOL_POLICY = {
     'BTCUSDT': {
@@ -95,7 +95,7 @@ def update_symbol_meta():
                 }
         return meta
     except Exception as e:
-        print("심볼 메타 정보 조회 오류:", e)
+        print("심볼 메타 정보 조회 오류:", e, flush=True)
         return {}
 
 def refresh_symbol_meta():
@@ -137,10 +137,17 @@ def http_request(method, endpoint, body_dict):
         'Content-Type': 'application/json'
     }
     url = BASE_URL + endpoint
-    if method == "GET":
-        return requests.get(url, headers=headers, params=body_dict)
-    else:
-        return requests.post(url, headers=headers, data=sign_body)
+    try:
+        if method == "GET":
+            resp = requests.get(url, headers=headers, params=body_dict)
+        else:
+            resp = requests.post(url, headers=headers, data=sign_body)
+        print(f"[HTTP] {method} {url} params/body: {body_dict} --> status:{resp.status_code}", flush=True)
+        print(f"[HTTP] Response: {resp.text}", flush=True)
+        return resp
+    except Exception as e:
+        print(f"[HTTP ERROR] {method} {url} : {e}", flush=True)
+        raise
 
 refresh_symbol_meta()
 
@@ -150,6 +157,7 @@ def get_my_balance():
     resp = http_request('GET', endpoint, params)
     try:
         js = resp.json()
+        print(f"[잔고 응답] {js}", flush=True)
         if js.get('retCode') == 0:
             wallets = js['result']['list'][0]['coin']
             for coin in wallets:
@@ -157,7 +165,7 @@ def get_my_balance():
                     if 'walletBalance' in coin:
                         return float(coin['walletBalance'])
     except Exception:
-        pass
+        print("[잔고 조회 실패]", flush=True)
     return 0.0
 
 def set_leverage_and_mode(symbol, buy_leverage, sell_leverage, margin_mode):
@@ -172,8 +180,10 @@ def set_leverage_and_mode(symbol, buy_leverage, sell_leverage, margin_mode):
     resp = http_request('POST', endpoint, body)
     try:
         data = resp.json()
+        print(f"[레버리지 설정 응답] {data}", flush=True)
         return data.get('retCode') == 0
     except Exception:
+        print("[레버리지 설정 실패]", flush=True)
         return False
 
 def get_position_size(symbol, position_idx):
@@ -182,13 +192,14 @@ def get_position_size(symbol, position_idx):
     resp = http_request('GET', endpoint, body)
     try:
         data = resp.json()
+        print(f"[포지션 사이즈 응답] {data}", flush=True)
         if data.get('retCode') == 0:
             pos_list = data['result']['list']
             for pos in pos_list:
                 if int(pos.get('positionIdx', 0)) == position_idx:
                     return float(pos.get('size', 0))
     except Exception:
-        pass
+        print("[포지션 사이즈 조회 실패]", flush=True)
     return 0
 
 def get_position_entry_price(symbol, position_idx):
@@ -197,6 +208,7 @@ def get_position_entry_price(symbol, position_idx):
     resp = http_request('GET', endpoint, body)
     try:
         data = resp.json()
+        print(f"[포지션 진입가 응답] {data}", flush=True)
         if data.get('retCode') == 0:
             pos_list = data['result']['list']
             for pos in pos_list:
@@ -205,7 +217,7 @@ def get_position_entry_price(symbol, position_idx):
                     if price is not None:
                         return float(price)
     except Exception:
-        pass
+        print("[포지션 진입가 조회 실패]", flush=True)
     return None
 
 def has_open_position(symbol, position_idx):
@@ -247,8 +259,10 @@ def get_order_qty(symbol, order_type="Market"):
     price = None
     try:
         js = price_resp.json()
+        print(f"[현재가 응답] {js}", flush=True)
         price = float(js['result']['list'][0]['lastPrice'])
     except Exception:
+        print("[현재가 조회 실패]", flush=True)
         price = None
 
     my_balance = get_my_balance()
@@ -266,6 +280,7 @@ def get_order_qty(symbol, order_type="Market"):
         qty = 1 if precision == 0 else round(1.0, precision)
     if qty > max_qty:
         qty = max_qty
+    print(f"[주문수량 계산] price:{price}, balance:{my_balance}, qty:{qty}", flush=True)
     return qty
 
 def close_position_and_wait(symbol, close_side, max_retry=3, wait_sec=5):
@@ -290,6 +305,7 @@ def close_position_and_wait(symbol, close_side, max_retry=3, wait_sec=5):
             'positionIdx': position_idx,
             'orderLinkId': f"close_{uuid.uuid4().hex}"
         }
+        print("[포지션 종료 요청]", body, flush=True)
         http_request('POST', endpoint, body)
         for _ in range(wait_sec):
             time.sleep(1)
@@ -322,10 +338,10 @@ def enforce_min_tick_gap(entry, tgt, tick, min_gap=20):
     return round_to_tick(tgt, tick)
 
 def get_tp_sl_by_real_pnl(entry_price, position_idx, lev, tp_pnl=TP_PROFIT_RATE, sl_pnl=SL_LOSS_RATE, commission=COMMISSION):
-    if position_idx == 1:
+    if position_idx == 1:  # 롱
         tp = entry_price * (1 + (tp_pnl + commission) / lev)
         sl = entry_price * (1 + (sl_pnl - commission) / lev)
-    else:
+    else:  # 숏
         tp = entry_price * (1 - (tp_pnl - commission) / lev)
         sl = entry_price * (1 - (sl_pnl + commission) / lev)
     return tp, sl
@@ -341,8 +357,8 @@ def set_trading_stop(symbol, position_idx, tp_price, sl_price):
     if sl_price:
         body["stopLoss"] = str(sl_price)
     resp = http_request("POST", "/v5/position/trading-stop", body)
-    print(f"[TRADING-STOP] set TP/SL: {body}")
-    print("[TRADING-STOP 응답]", resp.text)
+    print(f"[TRADING-STOP] set TP/SL: {body}", flush=True)
+    print("[TRADING-STOP 응답]", resp.text, flush=True)
     return resp
 
 def clear_trading_stop(symbol, position_idx):
@@ -354,7 +370,7 @@ def clear_trading_stop(symbol, position_idx):
         "stopLoss": "",
     }
     resp = http_request("POST", "/v5/position/trading-stop", body)
-    print(f"[트레이딩스톱 해제]:", resp.text)
+    print(f"[트레이딩스톱 해제]:", resp.text, flush=True)
     return resp
 
 def get_open_orders(symbol):
@@ -366,10 +382,11 @@ def get_open_orders(symbol):
     resp = http_request('GET', endpoint, params)
     try:
         js = resp.json()
+        print(f"[오픈오더 응답] {js}", flush=True)
         if js.get('retCode') == 0:
             return js['result']['list']
     except Exception as e:
-        print("[오픈오더 조회 오류]", e)
+        print("[오픈오더 조회 오류]", e, flush=True)
     return []
 
 def cancel_order(symbol, order_id):
@@ -380,7 +397,7 @@ def cancel_order(symbol, order_id):
         'orderId': order_id,
     }
     resp = http_request('POST', endpoint, body)
-    print(f"[지정가 오더 취소] {order_id} 결과:", resp.text)
+    print(f"[지정가 오더 취소] {order_id} 결과:", resp.text, flush=True)
     return resp
 
 def place_tp_sl_orders(symbol, qty, tp_price, sl_price, position_idx, entry_price, tick, tp_order_id, sl_order_id):
@@ -388,7 +405,7 @@ def place_tp_sl_orders(symbol, qty, tp_price, sl_price, position_idx, entry_pric
     tp_price_rounded = round_to_tick(tp_price, tick)
     sl_price_rounded = round_to_tick(sl_price, tick)
     qty_str = get_qty_str(symbol, qty)
-    print(f"[TP/SL 주문발행] side: {side}, qty: {qty_str}, TP: {tp_price_rounded}, SL: {sl_price_rounded}")
+    print(f"[TP/SL 주문발행] side: {side}, qty: {qty_str}, TP: {tp_price_rounded}, SL: {sl_price_rounded}", flush=True)
     tp_body = {
         'category': 'linear',
         'symbol': symbol,
@@ -401,7 +418,7 @@ def place_tp_sl_orders(symbol, qty, tp_price, sl_price, position_idx, entry_pric
         'orderLinkId': tp_order_id,
     }
     tp_resp = http_request('POST', '/v5/order/create', tp_body)
-    print(">>> [TP 주문 요청 결과] ", tp_resp.text)
+    print(">>> [TP 주문 요청 결과] ", tp_resp.text, flush=True)
 
     sl_body = {
         'category': 'linear',
@@ -415,14 +432,14 @@ def place_tp_sl_orders(symbol, qty, tp_price, sl_price, position_idx, entry_pric
         'orderLinkId': sl_order_id,
     }
     sl_resp = http_request('POST', '/v5/order/create', sl_body)
-    print(">>> [SL 주문 요청 결과] ", sl_resp.text)
+    print(">>> [SL 주문 요청 결과] ", sl_resp.text, flush=True)
 
 def place_dual_tp_sl(symbol, qty, tp_price, sl_price, position_idx, entry_price, tick, tp_order_id, sl_order_id):
     place_tp_sl_orders(symbol, qty, tp_price, sl_price, position_idx, entry_price, tick, tp_order_id, sl_order_id)
     set_trading_stop(symbol, position_idx, tp_price, sl_price)
 
 def monitor_and_cleanup(symbol, position_idx, tp_order_id, sl_order_id):
-    print("[모니터링] 지정가 TP/SL 청산시 자동정리 시작")
+    print("[모니터링] 지정가 TP/SL 청산시 자동정리 시작", flush=True)
     while True:
         size = get_position_size(symbol, position_idx)
         if size == 0:
@@ -431,7 +448,7 @@ def monitor_and_cleanup(symbol, position_idx, tp_order_id, sl_order_id):
                 if order.get('orderLinkId') in [tp_order_id, sl_order_id]:
                     cancel_order(symbol, order['orderId'])
             clear_trading_stop(symbol, position_idx)
-            print("[모니터링] 청산 감지 후, 잔여 오더 및 트레이딩스톱 해제 완료")
+            print("[모니터링] 청산 감지 후, 잔여 오더 및 트레이딩스톱 해제 완료", flush=True)
             break
         time.sleep(1)
 
@@ -466,28 +483,23 @@ def monitor_trailing_stop(symbol, position_idx, entry_price, lev, policy):
                             trigger = s['trigger']
                             trail_sl = s['sl']
                             if i not in triggered and pnl_rate >= trigger:
-                                if position_idx == 1:
+                                if position_idx == 1:  # 롱
                                     new_sl = entry * (1 + (trail_sl - commission) / lev)
                                 else:
                                     new_sl = entry * (1 - (trail_sl + commission) / lev)
                                 set_trading_stop(symbol, position_idx, "", new_sl)
-                                print(f"[트레일링스탑 {i+1}회차 적용] {symbol} SL → {trail_sl*100:.2f}% (실행가: {new_sl})")
+                                print(f"[트레일링스탑 {i+1}회차 적용] {symbol} SL → {trail_sl*100:.2f}% (실행가: {new_sl})", flush=True)
                                 triggered.add(i)
         except Exception:
-            pass
+            print("[트레일링스탑 오류]", flush=True)
         time.sleep(1)
 
-### 주문 실행부에서 아래처럼 교체해주면 끝! ###
 def place_order(signal, symbol, req_json):
-    import traceback
     try:
         bybit_symbol = get_underlying_symbol(symbol)
         qty = get_order_qty(bybit_symbol, order_type="Market")
-        print(f"[DEBUG] 주문수량: {qty}, 심볼: {bybit_symbol}")  # ← 추가 (1)
-        my_balance = get_my_balance()
-        print(f"[DEBUG] 내 USDT 잔고: {my_balance}")            # ← 추가 (2)
         if qty is None or qty == 0:
-            print("[ERROR] 주문수량 0, 진입 스킵")
+            print("[ERROR] 주문수량 0, 진입 스킵", flush=True)
             return {'error': 'Order qty 0, skip'}
         qty_str = get_qty_str(bybit_symbol, qty)
         client_order_id = f"entry_{uuid.uuid4().hex}"
@@ -503,6 +515,7 @@ def place_order(signal, symbol, req_json):
             if has_open_position(bybit_symbol, 2):
                 closed = close_position_and_wait(bybit_symbol, 'Sell')
                 if not closed:
+                    print("[ERROR] 숏 청산 지연", flush=True)
                     return {'error': '숏 청산 지연'}
             if not has_open_position(bybit_symbol, 1):
                 endpoint = '/v5/order/create'
@@ -515,12 +528,19 @@ def place_order(signal, symbol, req_json):
                     'positionIdx': 1,
                     'orderLinkId': client_order_id
                 }
-                print("[DEBUG] 주문 요청 body:", body)           # ← 추가 (3)
+                print("[LONG 주문 요청]", body, flush=True)
                 resp = http_request('POST', endpoint, body)
-                print("[DEBUG] 주문 응답:", resp.text)           # ← 추가 (4)
+                print("[LONG 주문 응답]", resp.text, flush=True)
+                try:
+                    r_json = resp.json()
+                    if r_json.get('retCode') != 0:
+                        print("[LONG 주문 Bybit API Error]:", r_json, flush=True)
+                except Exception as e:
+                    print("[LONG 주문 Bybit API JSON decode error]:", resp.text, flush=True)
+
                 actual_size = wait_until_position_open(bybit_symbol, 1, timeout=10, interval=0.5)
                 if actual_size == 0:
-                    print("[경고] 진입 후 10초 내 포지션 생성 안됨!")
+                    print("[경고] 진입 후 10초 내 포지션 생성 안됨!", flush=True)
                     return {'error': '포지션 생성 실패'}
                 entry_price = get_position_entry_price(bybit_symbol, 1)
                 if entry_price is None or entry_price < 0.00001:
@@ -530,12 +550,12 @@ def place_order(signal, symbol, req_json):
                     try:
                         js = price_resp.json()
                         entry_price = float(js['result']['list'][0]['lastPrice'])
-                        print(f"[TP/SL] 체결가/포지션가 없음 → 현재가({entry_price})로 TP/SL 생성")
+                        print(f"[TP/SL] 체결가/포지션가 없음 → 현재가({entry_price})로 TP/SL 생성", flush=True)
                     except Exception:
-                        print("[TP/SL] 현재가 조회 실패")
+                        print("[TP/SL] 현재가 조회 실패", flush=True)
                         entry_price = None
                 if entry_price is None or entry_price < 0.00001:
-                    print("[경고] entry_price 값이 비정상입니다:", entry_price)
+                    print("[경고] entry_price 값이 비정상입니다:", entry_price, flush=True)
                     return {'error': '진입가 조회 실패'}
 
                 tick = SYMBOL_TICK_SIZE.get(bybit_symbol, 0.01)
@@ -551,7 +571,7 @@ def place_order(signal, symbol, req_json):
                     ).start()
                 tp_order_id = f"tp_{uuid.uuid4().hex}"
                 sl_order_id = f"sl_{uuid.uuid4().hex}"
-                print(f"[DEBUG][LONG] 진입가: {entry_price}, TP: {tp_price}, SL: {sl_price}, tick: {tick}")
+                print(f"[DEBUG][LONG] 진입가: {entry_price}, TP: {tp_price}, SL: {sl_price}, tick: {tick}", flush=True)
                 place_dual_tp_sl(bybit_symbol, actual_size, tp_price, sl_price, 1, entry_price, tick, tp_order_id, sl_order_id)
                 threading.Thread(target=monitor_and_cleanup, args=(bybit_symbol, 1, tp_order_id, sl_order_id), daemon=True).start()
 
@@ -560,6 +580,7 @@ def place_order(signal, symbol, req_json):
             if has_open_position(bybit_symbol, 1):
                 closed = close_position_and_wait(bybit_symbol, 'Buy')
                 if not closed:
+                    print("[ERROR] 롱 청산 지연", flush=True)
                     return {'error': '롱 청산 지연'}
             if not has_open_position(bybit_symbol, 2):
                 endpoint = '/v5/order/create'
@@ -572,12 +593,19 @@ def place_order(signal, symbol, req_json):
                     'positionIdx': 2,
                     'orderLinkId': client_order_id
                 }
-                print("[DEBUG] 주문 요청 body:", body)           # ← 추가 (3)
+                print("[SHORT 주문 요청]", body, flush=True)
                 resp = http_request('POST', endpoint, body)
-                print("[DEBUG] 주문 응답:", resp.text)           # ← 추가 (4)
+                print("[SHORT 주문 응답]", resp.text, flush=True)
+                try:
+                    r_json = resp.json()
+                    if r_json.get('retCode') != 0:
+                        print("[SHORT 주문 Bybit API Error]:", r_json, flush=True)
+                except Exception as e:
+                    print("[SHORT 주문 Bybit API JSON decode error]:", resp.text, flush=True)
+
                 actual_size = wait_until_position_open(bybit_symbol, 2, timeout=10, interval=0.5)
                 if actual_size == 0:
-                    print("[경고] 진입 후 10초 내 포지션 생성 안됨!")
+                    print("[경고] 진입 후 10초 내 포지션 생성 안됨!", flush=True)
                     return {'error': '포지션 생성 실패'}
                 entry_price = get_position_entry_price(bybit_symbol, 2)
                 if entry_price is None or entry_price < 0.00001:
@@ -587,12 +615,12 @@ def place_order(signal, symbol, req_json):
                     try:
                         js = price_resp.json()
                         entry_price = float(js['result']['list'][0]['lastPrice'])
-                        print(f"[TP/SL] 체결가/포지션가 없음 → 현재가({entry_price})로 TP/SL 생성")
+                        print(f"[TP/SL] 체결가/포지션가 없음 → 현재가({entry_price})로 TP/SL 생성", flush=True)
                     except Exception:
-                        print("[TP/SL] 현재가 조회 실패")
+                        print("[TP/SL] 현재가 조회 실패", flush=True)
                         entry_price = None
                 if entry_price is None or entry_price < 0.00001:
-                    print("[경고] entry_price 값이 비정상입니다:", entry_price)
+                    print("[경고] entry_price 값이 비정상입니다:", entry_price, flush=True)
                     return {'error': '진입가 조회 실패'}
 
                 tick = SYMBOL_TICK_SIZE.get(bybit_symbol, 0.01)
@@ -608,41 +636,43 @@ def place_order(signal, symbol, req_json):
                     ).start()
                 tp_order_id = f"tp_{uuid.uuid4().hex}"
                 sl_order_id = f"sl_{uuid.uuid4().hex}"
-                print(f"[DEBUG][SHORT] 진입가: {entry_price}, TP: {tp_price}, SL: {sl_price}, tick: {tick}")
+                print(f"[DEBUG][SHORT] 진입가: {entry_price}, TP: {tp_price}, SL: {sl_price}, tick: {tick}", flush=True)
                 place_dual_tp_sl(bybit_symbol, actual_size, tp_price, sl_price, 2, entry_price, tick, tp_order_id, sl_order_id)
                 threading.Thread(target=monitor_and_cleanup, args=(bybit_symbol, 2, tp_order_id, sl_order_id), daemon=True).start()
         else:
+            print("[ERROR] Invalid signal", flush=True)
             return {'error': 'Invalid signal'}, 400
         return {'message': f'{signal} processed'}
     except Exception as e:
-        import traceback
-        print("[place_order ERROR]", traceback.format_exc())
+        print("[place_order ERROR]", traceback.format_exc(), flush=True)
         return {'error': str(e)}
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
         raw = request.data.decode('utf-8').strip()
+        print(f"[WEBHOOK 수신 RAW]: {raw}", flush=True)
         if not raw:
-            print("No payload received from TradingView")
+            print("No payload received from TradingView", flush=True)
             return jsonify({'error': 'No payload received from TradingView'}), 400
         try:
             data = json.loads(raw)
         except Exception as e:
-            print("Failed to decode JSON:", e)
-            print(traceback.format_exc())
+            print("Failed to decode JSON:", e, flush=True)
+            print(traceback.format_exc(), flush=True)
             return jsonify({'error': f'Failed to decode JSON: {e}'}), 400
         signal = data.get('signal')
         symbol = data.get('symbol', None)
         if not signal or not symbol:
-            print("Invalid signal or symbol")
+            print("Invalid signal or symbol", flush=True)
             return jsonify({'error': 'Invalid signal or symbol'}), 400
+        print(f"[WEBHOOK] signal:{signal}, symbol:{symbol}, data:{data}", flush=True)
         result = place_order(signal, symbol, data)
         status_code = 200 if 'message' in result else 500
-        print("place_order result:", result)
+        print("place_order result:", result, flush=True)
         return jsonify(result), status_code
     except Exception as e:
-        print(traceback.format_exc())
+        print(traceback.format_exc(), flush=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/')
